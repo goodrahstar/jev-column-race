@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Column Race</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">
+      <h1><span id="rowCount">1,000</span> app reviews · 4 AI columns</h1>
+      <p>Sentiment · Topic · Bug report · Churn risk — same reviews, same batches, same concurrency.</p>
+    </div>
+    <div class="controls">
+      <label class="field">Rows
+        <select id="rows">
+          <option value="100">100</option>
+          <option value="250">250</option>
+          <option value="500">500</option>
+          <option value="1000" selected>1,000</option>
+        </select>
+      </label>
+      <label class="field">Mode
+        <select id="mode">
+          <option value="live" selected>Live API calls</option>
+          <option value="replay">Replay recorded run (1×)</option>
+        </select>
+      </label>
+      <button id="start" class="primary">Start race</button>
+      <button id="reset">Reset</button>
+    </div>
+  </header>
+
+  <main class="arena">
+    <section class="lane" id="lane-jev" data-side="jev"></section>
+    <section class="lane" id="lane-llm" data-side="llm"></section>
+  </main>
+
+  <div class="verdict" id="verdict" hidden></div>
+
+  <section class="rerank" id="rerank" hidden>
+    <div class="rerank-head">
+      <h2>Now re-rank all of it. <em>Zero model calls.</em></h2>
+      <p id="rerankStat">Jev returned probabilities, so they work like data.</p>
+    </div>
+    <div class="sliders">
+      <label>Bug weight <input type="range" id="wBug" min="0" max="100" value="50" /><output></output></label>
+      <label>Churn weight <input type="range" id="wChurn" min="0" max="100" value="30" /><output></output></label>
+      <label>Negativity weight <input type="range" id="wNeg" min="0" max="100" value="20" /><output></output></label>
+      <label>Only bugs above <input type="range" id="minBug" min="0" max="100" value="0" /><output></output></label>
+      <label class="field">Topic
+        <select id="topicFilter"><option value="">All topics</option></select>
+      </label>
+    </div>
+  </section>
+
+  <template id="lane-template">
+    <div class="lane-head">
+      <div class="who">
+        <span class="name"></span>
+        <span class="model"></span>
+        <span class="replay-tag" hidden>replay · 1×</span>
+      </div>
+      <div class="stats">
+        <div class="stat big"><span class="value time">0.0s</span><span class="label">elapsed</span></div>
+        <div class="stat"><span class="value cost">$0.0000</span><span class="label">spent</span></div>
+        <div class="stat"><span class="value rate">0</span><span class="label">rows / s</span></div>
+        <div class="stat"><span class="value reqs">0</span><span class="label">requests</span></div>
+      </div>
+      <div class="progress"><div class="bar"></div><span class="pct">0 / 0</span></div>
+    </div>
+    <div class="heat" aria-label="Every review as one square, coloured by sentiment when labelled"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>★</th><th>Review</th><th>Sentiment</th><th>Topic</th><th>Bug?</th><th>Churn</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="finish" hidden></div>
+    <div class="offline" hidden></div>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

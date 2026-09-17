@@ -1,0 +1,17 @@
+{
+  "name": "jev-column-race",
+  "version": "1.0.0",
+  "description": "Jev vs Gemini 3.8 Flash: labelling 1,000 app reviews, 4.1× faster and 7× cheaper",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Rahul Kumar",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "fetch-data": "node scripts/fetch-data.mjs",
+    "check": "node scripts/verify-data.mjs && node scripts/verify-server.mjs && node scripts/verify-run.mjs jev && node scripts/verify-run.mjs llm && node scripts/verify-quality.mjs && node scripts/verify-llm-mock.mjs && node scripts/verify-replay.mjs && node scripts/verify-browser.mjs"
+  }
+}
