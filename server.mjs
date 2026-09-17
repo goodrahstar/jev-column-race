@@ -35,7 +35,8 @@ export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join
   const reviews = JSON.parse(readFileSync(join(ROOT, "data/reviews.json"), "utf8"));
   const batchSize = Number(env.BATCH_SIZE || 20);
   const concurrency = Number(env.CONCURRENCY || 8);
-  const llmLabel = env.LLM_LABEL || env.LLM_MODEL || "LLM";
+  // Label the right lane by name even when no LLM env is configured (e.g. a replay-only deployment).
+  const llmLabel = () => env.LLM_LABEL || env.LLM_MODEL || (recorded("llm")?.model === BYOK_LLM.model ? BYOK_LLM.label : recorded("llm")?.model) || "LLM";
 
   const racers = !live ? { jev: null, llm: null } : {
     jev: env.TYPESAFE_API_KEY ? jevRacer({ key: env.TYPESAFE_API_KEY, model: env.TYPESAFE_MODEL || "jev-latest", fetchImpl }) : null,
@@ -72,7 +73,7 @@ export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join
       live_enabled: live,
       byok: byok ? { jev: "Jev", llm: BYOK_LLM.label, llm_model: BYOK_LLM.model } : null,
       jev: side("jev", "Jev"),
-      llm: side("llm", llmLabel),
+      llm: side("llm", llmLabel()),
     };
   }
 

@@ -331,7 +331,7 @@ function onLaneDone() {
       `<div class="item"><span class="big">${fmtRatio(llm.totals.cost / jev.totals.cost)} cheaper</span><span class="small">${fmtCost(jev.totals.cost)} vs ${fmtCost(llm.totals.cost)}</span></div>` +
       `<div class="item"><span class="big">${agree((a, b) => a.topic === b.topic)}%</span><span class="small">same topic</span></div>` +
       `<div class="item"><span class="big">${agree((a, b) => (a.bug >= 0.5) === (b.bug >= 0.5))}%</span><span class="small">same bug call</span></div>` +
-      `<div class="item"><span class="big">ρ ${qualityVsStars(jev).toFixed(2)} / ${qualityVsStars(llm).toFixed(2)}</span><span class="small">sentiment vs. stars (Jev / LLM)</span></div>`;
+      `<div class="item"><span class="big">ρ ${qualityVsStars(jev).toFixed(2)} / ${qualityVsStars(llm).toFixed(2)}</span><span class="small">sentiment vs. stars (${$(".name", jev.section).textContent} / ${$(".name", llm.section).textContent})</span></div>`;
     verdict.hidden = false;
   }
 }
