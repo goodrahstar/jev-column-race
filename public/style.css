@@ -63,6 +63,37 @@ button {
 button.primary { background: var(--jev); color: #0b0d10; border-color: var(--jev); }
 button:disabled { opacity: 0.45; cursor: default; }
 
+.keys {
+  margin: 14px 20px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  display: flex;
+  gap: 12px 24px;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.keys-copy { font-size: 13px; color: var(--muted); max-width: 520px; line-height: 1.5; }
+.keys-copy b { color: var(--text); }
+.key-links { display: block; margin-top: 2px; }
+.keys a { color: var(--jev); }
+.key-fields { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.key-fields input[type="password"] {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  width: 220px;
+  max-width: 100%;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.remember { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); padding-bottom: 8px; }
+@media (max-width: 720px) { .keys { margin-left: 16px; margin-right: 16px; } }
+
 .arena {
   flex: 1;
   display: grid;

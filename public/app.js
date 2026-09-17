@@ -42,9 +42,58 @@ function spearman(xs, ys) {
   return num / Math.sqrt(dx * dy);
 }
 
+const KEY_STORE = "columnRaceKeys";
+
+function visitorKeys() {
+  return { typesafe: $("#keyTypesafe").value.trim(), gemini: $("#keyGemini").value.trim() };
+}
+
+// A lane runs on the visitor's key when the server has no key of its own for it.
+function usesVisitorKey(side) {
+  return $("#mode").value === "live" && !config[side].live && Boolean(config.byok);
+}
+
+function hasVisitorKey(side) {
+  const key = visitorKeys()[side === "jev" ? "typesafe" : "gemini"];
+  return key.length >= 10;
+}
+
 function laneAvailable(side) {
   const mode = $("#mode").value;
-  return mode === "replay" ? Boolean(config[side].recorded) : config[side].live;
+  if (mode === "replay") return Boolean(config[side].recorded);
+  return config[side].live || (usesVisitorKey(side) && hasVisitorKey(side));
+}
+
+function laneLabel(side) {
+  return usesVisitorKey(side) && side === "llm" ? config.byok.llm : config[side].label;
+}
+
+function rememberKeys() {
+  try {
+    if ($("#rememberKeys").checked) localStorage.setItem(KEY_STORE, JSON.stringify(visitorKeys()));
+    else localStorage.removeItem(KEY_STORE);
+  } catch {
+    // Storage can be blocked (private windows); keys then live only in this page.
+  }
+}
+
+function restoreKeys() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY_STORE) || "null");
+    if (!saved) return false;
+    $("#keyTypesafe").value = saved.typesafe || "";
+    $("#keyGemini").value = saved.gemini || "";
+    $("#rememberKeys").checked = true;
+    return Boolean(saved.typesafe || saved.gemini);
+  } catch {
+    return false;
+  }
+}
+
+function updateKeyPanel() {
+  const needsKeys = $("#mode").value === "live" && Boolean(config.byok) && SIDES.some((s) => !config[s].live);
+  $("#keys").hidden = !needsKeys;
+  $("#start").disabled = !SIDES.some(laneAvailable) || SIDES.some((s) => lanes[s]?.running);
 }
 
 function buildLane(side, n) {
@@ -53,8 +102,9 @@ function buildLane(side, n) {
   section.classList.remove("running");
   const info = config[side];
   const mode = $("#mode").value;
-  $(".name", section).textContent = info.label;
-  $(".model", section).textContent = (mode === "replay" ? info.recorded?.model : info.model) || "";
+  $(".name", section).textContent = mode === "replay" ? info.label : laneLabel(side);
+  $(".model", section).textContent =
+    (mode === "replay" ? info.recorded?.model : usesVisitorKey(side) ? (side === "llm" ? config.byok.llm_model : "jev-latest") : info.model) || "";
   $(".replay-tag", section).hidden = mode !== "replay";
   const lane = (lanes[side] = { side, section, n, results: new Map(), rowEls: [], heatEls: [], frontier: 0, running: false, done: false });
   $(".pct", section).textContent = `0 / ${fmtInt(n)}`;
@@ -64,12 +114,18 @@ function buildLane(side, n) {
     $(".table-wrap", section).hidden = true;
     const offline = $(".offline", section);
     offline.hidden = false;
-    offline.innerHTML =
+    // One wrapper element: .offline is a centring grid, so bare text and <b> would each become a row.
+    offline.innerHTML = "<div></div>";
+    offline.firstChild.innerHTML =
       mode === "replay"
         ? `No recorded ${info.label} run yet.<br>Run a live race once, then replay it.`
-        : side === "llm"
-          ? `Comparison model not configured.<br>Add <code>LLM_API_KEY</code> and <code>LLM_MODEL</code> to <code>.env</code><br>(any OpenAI-compatible endpoint) and restart.`
-          : `Add <code>TYPESAFE_API_KEY</code> to <code>.env</code> and restart.`;
+        : usesVisitorKey(side)
+          ? `Paste your ${side === "jev" ? "TypeSafe" : "Gemini"} API key above to race this lane live.<br>Or choose <b>Replay recorded run</b> to watch the measured race.`
+          : config.live_enabled === false
+          ? `Live API calls are disabled on this deployment.<br>Choose <b>Replay recorded run</b>.`
+          : side === "llm"
+            ? `Comparison model not configured.<br>Add <code>LLM_API_KEY</code> and <code>LLM_MODEL</code> to <code>.env</code><br>(any OpenAI-compatible endpoint) and restart.`
+            : `Add <code>TYPESAFE_API_KEY</code> to <code>.env</code> and restart.`;
     lane.unavailable = true;
     return;
   }
@@ -161,10 +217,49 @@ function startLane(side) {
   const lane = lanes[side];
   if (lane.unavailable) return;
   const mode = $("#mode").value;
+  if (usesVisitorKey(side)) return streamWithVisitorKey(lane);
   const source = new EventSource(`/api/race?side=${side}&mode=${mode}&n=${lane.n}`);
   lane.source = source;
-  source.onmessage = (message) => {
-    const event = JSON.parse(message.data);
+  source.onmessage = (message) => handleEvent(lane, JSON.parse(message.data));
+  // EventSource reconnects by default; a reconnect would start a second race, so close instead.
+  source.onerror = () => lane.running && stopLane(lane, "Connection closed before the run finished.");
+}
+
+// Visitor keys travel in a POST body, never in a URL, so they stay out of history and access logs.
+async function streamWithVisitorKey(lane) {
+  const controller = new AbortController();
+  lane.source = { close: () => controller.abort() };
+  const keys = visitorKeys();
+  const body = { side: lane.side, n: lane.n, keys: lane.side === "jev" ? { typesafe: keys.typesafe } : { gemini: keys.gemini } };
+  try {
+    const response = await fetch("/api/race", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      return stopLane(lane, error.error || `HTTP ${response.status}`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let index;
+      while ((index = buffer.indexOf("\n\n")) >= 0) {
+        const chunk = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        if (chunk.startsWith("data: ")) handleEvent(lane, JSON.parse(chunk.slice(6)));
+      }
+    }
+    if (!lane.done && !lane.failed) stopLane(lane, "Connection closed before the run finished.");
+  } catch (error) {
+    if (!controller.signal.aborted) stopLane(lane, error.message);
+  }
+}
+
+function handleEvent(lane, event) {
+  const source = lane.source;
+  {
     if (event.type === "start") {
       lane.clientStart = performance.now();
       lane.running = true;
@@ -192,12 +287,11 @@ function startLane(side) {
     } else if (event.type === "error") {
       stopLane(lane, event.message);
     }
-  };
-  // EventSource reconnects by default; a reconnect would start a second race, so close instead.
-  source.onerror = () => lane.running && stopLane(lane, "Connection closed before the run finished.");
+  }
 }
 
 function stopLane(lane, message) {
+  if (lane.failed || lane.done) return;
   lane.source?.close();
   lane.running = false;
   lane.failed = true;
@@ -324,8 +418,7 @@ function reset() {
   for (const side of SIDES) buildLane(side, n);
   $("#verdict").hidden = true;
   $("#rerank").hidden = true;
-  const anyAvailable = SIDES.some(laneAvailable);
-  $("#start").disabled = !anyAvailable;
+  updateKeyPanel();
 }
 
 async function init() {
@@ -345,7 +438,18 @@ async function init() {
   for (const input of document.querySelectorAll(".sliders input, #topicFilter")) input.addEventListener("input", applyRerank);
   const params = new URLSearchParams(location.search);
   if (params.get("rows")) $("#rows").value = params.get("rows");
+  const restored = config.byok ? restoreKeys() : false;
   if (params.get("mode")) $("#mode").value = params.get("mode");
+  else if (config.live_enabled === false && !restored) $("#mode").value = "replay";
+  for (const input of ["#keyTypesafe", "#keyGemini"]) {
+    $(input).addEventListener("input", () => {
+      rememberKeys();
+      updateKeyPanel();
+    });
+    // Rebuild the lanes once a key is complete, so an unlocked lane shows its table.
+    $(input).addEventListener("change", reset);
+  }
+  $("#rememberKeys").addEventListener("change", rememberKeys);
   reset();
   requestAnimationFrame(tick);
   if (params.has("autostart")) $("#start").click();

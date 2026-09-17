@@ -14,15 +14,30 @@ export function loadEnv(file = join(ROOT, ".env")) {
   }
 }
 
+// Bring-your-own-key races always use these fixed endpoints and models. Visitors supply keys only,
+// never URLs, so the function cannot be pointed at arbitrary hosts.
+export const BYOK_LLM = {
+  label: "Gemini 3.8 Flash",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+  model: "gemini-3.8-flash",
+  priceInput: 0.75,
+  priceOutput: 3.75,
+  reasoning: JSON.stringify({ reasoning_effort: "none" }),
+};
+const KEY_PATTERN = /^[\x21-\x7e]{10,256}$/;
+const MAX_BODY_BYTES = 4096;
+
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml" };
 
-export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join(ROOT, "runs") } = {}) {
+// `live: false` means the server's own keys are never loaded, so no paid call happens on its account.
+// `byok: true` lets a visitor run a live race with their own TypeSafe and Gemini keys (POST /api/race).
+export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join(ROOT, "runs"), live = true, byok = true } = {}) {
   const reviews = JSON.parse(readFileSync(join(ROOT, "data/reviews.json"), "utf8"));
   const batchSize = Number(env.BATCH_SIZE || 20);
   const concurrency = Number(env.CONCURRENCY || 8);
   const llmLabel = env.LLM_LABEL || env.LLM_MODEL || "LLM";
 
-  const racers = {
+  const racers = !live ? { jev: null, llm: null } : {
     jev: env.TYPESAFE_API_KEY ? jevRacer({ key: env.TYPESAFE_API_KEY, model: env.TYPESAFE_MODEL || "jev-latest", fetchImpl }) : null,
     llm:
       env.LLM_API_KEY && env.LLM_MODEL
@@ -54,19 +69,59 @@ export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join
       reviews: reviews.length,
       batch_size: batchSize,
       concurrency,
+      live_enabled: live,
+      byok: byok ? { jev: "Jev", llm: BYOK_LLM.label, llm_model: BYOK_LLM.model } : null,
       jev: side("jev", "Jev"),
       llm: side("llm", llmLabel),
     };
   }
 
+  async function readBody(request) {
+    let size = 0;
+    const chunks = [];
+    for await (const chunk of request) {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) throw Object.assign(new Error("Request body too large"), { status: 413 });
+      chunks.push(chunk);
+    }
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    } catch {
+      throw Object.assign(new Error("Body must be JSON"), { status: 400 });
+    }
+  }
+
+  // Builds a one-off racer from a visitor's key. The key lives only in this request's closure.
+  function visitorRacer(side, keys) {
+    const key = side === "jev" ? keys?.typesafe : keys?.gemini;
+    if (typeof key !== "string" || !KEY_PATTERN.test(key)) return { error: side === "jev" ? "Add your TypeSafe API key to race Jev live." : `Add your Gemini API key to race ${BYOK_LLM.label} live.` };
+    const racer =
+      side === "jev"
+        ? jevRacer({ key, model: "jev-latest", fetchImpl })
+        : llmRacer({ key, baseUrl: BYOK_LLM.baseUrl, model: BYOK_LLM.model, priceInput: BYOK_LLM.priceInput, priceOutput: BYOK_LLM.priceOutput, reasoning: BYOK_LLM.reasoning, fetchImpl });
+    return { racer, key };
+  }
+
   async function streamRace(request, response, url) {
-    const side = url.searchParams.get("side");
-    const mode = url.searchParams.get("mode") || "live";
-    const n = Math.min(reviews.length, Math.max(1, Number(url.searchParams.get("n") || reviews.length)));
+    let body = {};
+    if (request.method === "POST") {
+      if (!byok) return send(response, 403, { error: "Bring-your-own-key races are disabled on this deployment." });
+      try {
+        body = await readBody(request);
+      } catch (error) {
+        return send(response, error.status || 400, { error: error.message });
+      }
+    }
+    const param = (name) => (request.method === "POST" ? body[name] : url.searchParams.get(name));
+    const side = param("side");
+    const mode = request.method === "POST" ? "live" : param("mode") || "live";
+    const n = Math.min(reviews.length, Math.max(1, Math.floor(Number(param("n") || reviews.length)) || reviews.length));
     if (!["jev", "llm"].includes(side)) return send(response, 400, { error: "side must be jev or llm" });
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
     const controller = new AbortController();
-    request.on("close", () => controller.abort());
+    // Abort only if the client goes away before we finish. (A request "close" can fire as soon as a
+    // host runtime consumes the empty GET body, which would silently cut the stream on Vercel.)
+    response.on("close", () => response.writableFinished || controller.abort());
     const write = (event) => !controller.signal.aborted && response.write(`data: ${JSON.stringify(event)}\n\n`);
 
     if (mode === "replay") {
@@ -87,9 +142,24 @@ export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join
       return response.end();
     }
 
-    const racer = racers[side];
+    let racer = racers[side];
+    let visitorKey = null;
+    if (request.method === "POST") {
+      const visitor = visitorRacer(side, body.keys);
+      if (visitor.error) {
+        write({ type: "error", message: visitor.error });
+        return response.end();
+      }
+      racer = visitor.racer;
+      visitorKey = visitor.key;
+    }
+    // Provider errors can echo request details; never send a visitor's key back, even to themselves.
+    const scrub = (message) => (visitorKey ? String(message).split(visitorKey).join("[your key]").split(visitorKey.slice(-12)).join("[key]") : message);
     if (!racer) {
-      write({ type: "error", message: side === "llm" ? "Add LLM_API_KEY and LLM_MODEL to .env" : "Add TYPESAFE_API_KEY to .env" });
+      write({
+        type: "error",
+        message: !live ? "Live mode is disabled on this deployment. Use replay." : side === "llm" ? "Add LLM_API_KEY and LLM_MODEL to .env" : "Add TYPESAFE_API_KEY to .env",
+      });
       return response.end();
     }
     const events = [];
@@ -105,25 +175,19 @@ export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join
         },
       });
       const done = events.at(-1);
-      if (done?.type === "done" && !controller.signal.aborted) {
-        mkdirSync(runsDir, { recursive: true });
-        writeFileSync(
-          runFile(side),
-          JSON.stringify({
-            side,
-            model: racer.model,
-            recorded_at: new Date().toISOString(),
-            rows: done.totals.rows,
-            ms: done.t,
-            cost: done.totals.cost,
-            batch_size: batchSize,
-            concurrency,
-            events,
-          }),
-        );
+      // Visitor runs are never recorded: the published replays stay the measured demo runs.
+      if (done?.type === "done" && !controller.signal.aborted && !visitorKey) {
+        const record = { side, model: racer.model, recorded_at: new Date().toISOString(), rows: done.totals.rows, ms: done.t, cost: done.totals.cost, batch_size: batchSize, concurrency, events };
+        try {
+          mkdirSync(runsDir, { recursive: true });
+          writeFileSync(runFile(side), JSON.stringify(record));
+        } catch (error) {
+          // Read-only filesystem (e.g. a Vercel function): the race itself still succeeded.
+          console.warn(`Could not record ${side} run: ${error.message}`);
+        }
       }
     } catch (error) {
-      write({ type: "error", message: error.message });
+      write({ type: "error", message: scrub(error.message) });
     }
     response.end();
   }
@@ -149,6 +213,16 @@ export function createApp({ env = process.env, fetchImpl = fetch, runsDir = join
 function send(response, status, body) {
   response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   response.end(JSON.stringify(body));
+}
+
+// Vercel entry point. Vercel imports this module (so the listen() block below never runs) and needs a
+// default export that is a function or server. The app is built lazily on the first request.
+// The owner's keys are used only if ALLOW_LIVE_RACE=1: a public URL must not spend them for anyone who opens it.
+// Visitors can still race live with their own keys (disable with ALLOW_BYOK=0) or watch the recorded replays.
+let vercelApp;
+export default function handler(request, response) {
+  vercelApp ??= createApp({ live: process.env.ALLOW_LIVE_RACE === "1", byok: process.env.ALLOW_BYOK !== "0" });
+  vercelApp.emit("request", request, response);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

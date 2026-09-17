@@ -12,6 +12,6 @@
   "scripts": {
     "start": "node server.mjs",
     "fetch-data": "node scripts/fetch-data.mjs",
-    "check": "node scripts/verify-data.mjs && node scripts/verify-server.mjs && node scripts/verify-run.mjs jev && node scripts/verify-run.mjs llm && node scripts/verify-quality.mjs && node scripts/verify-llm-mock.mjs && node scripts/verify-replay.mjs && node scripts/verify-browser.mjs"
+    "check": "node scripts/verify-data.mjs && node scripts/verify-server.mjs && node scripts/verify-run.mjs jev && node scripts/verify-run.mjs llm && node scripts/verify-quality.mjs && node scripts/verify-llm-mock.mjs && node scripts/verify-replay.mjs && node scripts/verify-byok.mjs && node scripts/verify-browser.mjs"
   }
 }

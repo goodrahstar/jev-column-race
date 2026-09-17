@@ -57,6 +57,10 @@ Open **http://127.0.0.1:8777** and click **Start race**. There is nothing to ins
 - **Replay recorded run (1×)** re-emits a recorded run on its original timestamps. The lane is labelled "replay · 1×". Replays need no keys and are never sped up. Use them for free retakes.
 - `?mode=replay&autostart` starts a replay on load. Portrait windows stack the lanes for vertical video.
 
+### Hosted: bring your own keys
+
+On a public deployment (Vercel), the owner's keys are never used unless `ALLOW_LIVE_RACE=1` is set. Visitors can watch the recorded replays for free, or paste their own TypeSafe and Gemini keys to race live on their own credits. Keys travel in a POST body, never a URL. The server uses them only for that race's calls to `api.typesafe.ai` and `generativelanguage.googleapis.com`, with fixed models, and never stores, logs, or records them. Set `ALLOW_BYOK=0` to turn this off.
+
 The right lane takes any OpenAI-compatible endpoint. Set `LLM_BASE_URL`, `LLM_MODEL`, `LLM_LABEL`, and the per-million token prices in `.env`. The defaults in `.env.example` are the settings used for the recorded run.
 
 ## How it works
@@ -112,6 +116,7 @@ Measurement boundaries, cost math, and the full numbers are in [performance.md](
 npm run check                       # all of the below, in order
 node scripts/verify-data.mjs        # dataset: 1,000 reviews, 17 apps, provenance
 node scripts/verify-server.mjs      # page and API work, no key in any response
+node scripts/verify-byok.mjs        # visitor keys: fixed hosts only, never echoed, stored, or recorded
 node scripts/verify-run.mjs jev     # recorded run complete, cost matches tokens
 node scripts/verify-run.mjs llm
 node scripts/verify-quality.mjs     # sentiment vs stars

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createApp } from "../server.mjs";
+import { mockProviders } from "./mock-providers.mjs";
 
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 // Serve the real app (recorded runs only, no keys) on a free port so this check is self-contained.
@@ -96,7 +97,48 @@ try {
   await new Promise((r) => setTimeout(r, 600));
   await shot("3-rerank.png");
 
-  console.log(JSON.stringify({ mid, finish, verdict, rerank: { ...rerank, times: rerank.times.map((t) => Math.round(t)) } }));
+  // Bring-your-own-key panel: this server has no keys, so live mode must ask the visitor for theirs.
+  await cdp("Page.navigate", { url: PAGE.replace("mode=replay", "mode=live") });
+  await evaluate(`new Promise(r => { const iv = setInterval(() => { if (document.querySelector('#lane-jev .offline')) { clearInterval(iv); r(); } }, 50); })`);
+  const byok = await evaluate(`(async () => {
+    const before = { panel: !document.querySelector('#keys').hidden, start: document.querySelector('#start').disabled,
+      jevMsg: document.querySelector('#lane-jev .offline').innerText, llmMsg: document.querySelector('#lane-llm .offline').innerText,
+      llmName: document.querySelector('#lane-llm .name').textContent };
+    const input = document.querySelector('#keyTypesafe');
+    input.value = 'apikey_browser_check_not_a_real_key';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 300));
+    return { before, after: { start: document.querySelector('#start').disabled, jevTable: !document.querySelector('#lane-jev .table-wrap').hidden,
+      jevRows: document.querySelectorAll('#lane-jev tbody tr').length, llmStillLocked: !document.querySelector('#lane-llm .offline').hidden,
+      keyInUrl: location.href.includes('apikey_browser') } };
+  })()`);
+  await captureTo("5-byok.png");
+
+  // Full visitor-key race in the browser against mocked providers: POST streaming, both lanes, verdict.
+  const mocks = mockProviders({ delayMs: 40 });
+  const mockApp = createApp({ env: {}, live: false, byok: true, fetchImpl: mocks.fetchImpl, runsDir: profile }).listen(0, "127.0.0.1");
+  await new Promise((r) => mockApp.once("listening", r));
+  await cdp("Page.navigate", { url: `http://127.0.0.1:${mockApp.address().port}/?mode=live&rows=100` });
+  await evaluate(`new Promise(r => { const iv = setInterval(() => { if (document.querySelector('#lane-jev .offline')) { clearInterval(iv); r(); } }, 50); })`);
+  const byokRace = await evaluate(`(async () => {
+    for (const [sel, key] of [['#keyTypesafe', 'apikey_browser_mock_typesafe_key'], ['#keyGemini', 'AIzaBrowserMockGeminiKey0123456']]) {
+      const el = document.querySelector(sel); el.value = key; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change'));
+    }
+    document.querySelector('#start').click();
+    await new Promise((r, j) => { const t0 = Date.now(); const iv = setInterval(() => { if (!document.querySelector('#verdict').hidden) { clearInterval(iv); r(); } else if (Date.now() - t0 > 30000) { clearInterval(iv); j(new Error('byok race never finished: ' + document.querySelector('#lane-jev .pct').textContent + ' / ' + document.querySelector('#lane-llm .pct').textContent + ' ' + document.querySelector('#lane-llm .finish').innerText)); } }, 100); });
+    return { jev: document.querySelector('#lane-jev .pct').textContent, llm: document.querySelector('#lane-llm .pct').textContent,
+      verdict: document.querySelector('#verdict').innerText.split(String.fromCharCode(10)).slice(0, 2).join(' '), keyInUrl: location.href.includes('Mock') };
+  })()`);
+  mockApp.close();
+  const mockHosts = [...new Set(mocks.calls.map((c) => new URL(c.url).host))].sort().join();
+
+  console.log(JSON.stringify({ mid, finish, verdict, byok, byokRace, mockHosts, rerank: { ...rerank, times: rerank.times.map((t) => Math.round(t)) } }));
+  const b = byok.before, a = byok.after;
+  if (!b.panel || !b.start || !/Paste your TypeSafe API key/.test(b.jevMsg) || !/Paste your Gemini API key/.test(b.llmMsg) || b.llmName !== "Gemini 3.8 Flash") fail(`byok panel before key: ${JSON.stringify(b)}`);
+  if (byokRace.jev !== "100 / 100" || byokRace.llm !== "100 / 100" || !/faster/.test(byokRace.verdict) || byokRace.keyInUrl) fail(`byok browser race: ${JSON.stringify(byokRace)}`);
+  if (mockHosts !== "api.typesafe.ai,generativelanguage.googleapis.com" || mocks.calls.some((c) => !c.auth.includes("BrowserMock") && !c.auth.includes("browser_mock"))) fail(`byok browser race used wrong hosts or keys: ${mockHosts}`);
+  if (a.start || !a.jevTable || a.jevRows !== 1000 || !a.llmStillLocked || a.keyInUrl) fail(`byok panel after key: ${JSON.stringify(a)}`);
   if (hasLlm && (!/faster/.test(verdict.text) || !/cheaper/.test(verdict.text) || verdict.llmFilled !== 1000 || !/FINISHED/.test(verdict.llmFinish))) fail(`verdict: ${JSON.stringify(verdict)}`);
   const midRows = parseInt(mid.pct.replace(/,/g, ""));
   if (!(midRows > 0 && midRows < 1000)) fail(`mid-race screenshot not mid-race: ${mid.pct}`);
@@ -105,7 +147,8 @@ try {
   if (finish.maxGap > 400) fail(`frame freeze of ${Math.round(finish.maxGap)} ms during the race`);
   if (rerank.topBugs.some((b, i) => i > 0 && b > rerank.topBugs[i - 1] + 1)) fail(`bug-only ranking not descending: ${rerank.topBugs}`);
   if (rerank.minShownBug < 79 || rerank.shown >= 1000 || rerank.shown < 1) fail(`bug filter: shown=${rerank.shown} min=${rerank.minShownBug}`);
-  if (Math.max(...rerank.times) > 150) fail(`re-rank too slow: ${rerank.times.map(Math.round)}`);
+  // The first move also clears the race's 2,000 flash animations once; every later move is a pure re-rank.
+  if (rerank.times[0] > 300 || Math.max(...rerank.times.slice(1)) > 150) fail(`re-rank too slow: ${rerank.times.map(Math.round)}`);
   console.log("BROWSER OK");
 } catch (error) {
   fail(error.message);

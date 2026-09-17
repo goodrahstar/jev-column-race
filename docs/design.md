@@ -62,7 +62,10 @@ When the race is over and Jev's lane has finished, four sliders and a topic filt
 - `/api/config` exposes whether each lane is live, its label and model name, and the recorded run summary. It never exposes keys, base URLs, or prices.
 - Static files are served only from `public/`, and path traversal is rejected. The server listens on `127.0.0.1`.
 - `scripts/verify-server.mjs` starts the app with the real `.env`. It checks that no page, API response, or replay stream contains the TypeSafe key or its last 24 characters. It also tries `/..%2f.env`. The detector is tested against a planted key first.
-- `.env` is ignored by git. `.env.example` has empty values.
+- `.env` is ignored by git and excluded from Vercel uploads (`.vercelignore`, `vercel.json` `excludeFiles`). `.env.example` has empty values.
+- **Hosted deployments.** The Vercel entry (`export default handler`) builds the app with the owner's keys disabled unless `ALLOW_LIVE_RACE=1`, so a public URL cannot spend them.
+- **Visitor keys.** `POST /api/race` accepts `{ side, n, keys }` (body capped at 4 KB). The key must be 10–256 printable characters. It builds a one-off racer against fixed endpoints and models (`api.typesafe.ai` with `jev-latest`; Gemini's OpenAI-compatible endpoint with `gemini-3.8-flash`, thinking off). Any URL in the body is ignored. The key lives only in that request's closure. Provider error messages are scrubbed of it before streaming. Visitor runs are never written to `runs/`. The page sends only the key the lane needs and keeps keys in memory unless the visitor ticks "Remember in this browser" (localStorage).
+- `scripts/verify-byok.mjs` runs both lanes against mocked providers. It checks hosts, `Authorization` headers, model and settings, that the owner key is never used, that nothing is recorded, that malformed keys make no provider call, and that a provider error echoing the key is scrubbed. The scrub check was confirmed to fail with scrubbing disabled. `verify-browser.mjs` runs a full visitor-key race in headless Chrome against the same mocks.
 
 ## Boundaries
 

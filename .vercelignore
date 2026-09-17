@@ -1,0 +1,8 @@
+# Never upload local secrets or scratch output with `vercel deploy`.
+.env
+.env.*
+!.env.example
+shots/
+.unlazy/
+cache/
+node_modules/

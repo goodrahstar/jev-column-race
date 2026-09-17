@@ -33,6 +33,20 @@
     </div>
   </header>
 
+  <section class="keys" id="keys" hidden>
+    <div class="keys-copy">
+      <b>Race live with your own API keys.</b>
+      Your keys go only to this demo's server function, which uses them to call TypeSafe and Google for your race.
+      They are not stored on the server or logged.
+      <span class="key-links">Get keys: <a href="https://docs.typesafe.ai/introduction/quickstart" target="_blank" rel="noopener">TypeSafe</a> · <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Gemini</a></span>
+    </div>
+    <div class="key-fields">
+      <label class="field">TypeSafe API key <input id="keyTypesafe" type="password" autocomplete="off" spellcheck="false" placeholder="apikey_…" /></label>
+      <label class="field">Gemini API key <input id="keyGemini" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…" /></label>
+      <label class="remember"><input type="checkbox" id="rememberKeys" /> Remember in this browser</label>
+    </div>
+  </section>
+
   <main class="arena">
     <section class="lane" id="lane-jev" data-side="jev"></section>
     <section class="lane" id="lane-llm" data-side="llm"></section>
